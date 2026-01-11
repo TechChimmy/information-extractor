@@ -435,8 +435,9 @@ import {
     FaEye, FaTrash, FaEdit, FaTimes, FaSave, 
     FaChevronLeft, FaChevronRight, FaFilePdf, FaSearch, FaFilter 
 } from "react-icons/fa"; 
-import { getRecords, deleteRecord, updateRecord } from "../api"; 
-import { ChildData } from "../lib/ocr"; 
+import { getRecords, deleteRecord, updateRecord, deleteAllRecords, downloadExcel as apiDownloadExcel } from "../api";
+import { ChildData } from "../lib/ocr";
+import ConfirmDialog from "./ConfirmDialog"; 
 
 const RECORDS_PER_PAGE = 15;
 const PAGE_WINDOW_SIZE = 4;
@@ -545,6 +546,8 @@ export default function RecordsTable() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
     const [selectedRecord, setSelectedRecord] = useState<RecordWithId | null>(null);
+    const [deleteId, setDeleteId] = useState<string | null>(null);
+    const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
     
     // --- NEW SEARCH & FILTER STATE ---
     const [searchTerm, setSearchTerm] = useState("");
@@ -593,11 +596,8 @@ export default function RecordsTable() {
 
     const handleView = (r: RecordWithId) => { setSelectedRecord(r); setIsEditing(false); setIsModalOpen(true); };
     const handleEdit = (r: RecordWithId) => { setSelectedRecord(r); setIsEditing(true); setIsModalOpen(true); };
-    const handleDelete = async (id: string) => {
-        if (window.confirm("Delete this record?")) {
-            await deleteRecord(id);
-            await fetchRecords();
-        }
+    const handleDelete = (id: string) => {
+        setDeleteId(id);
     };
     const handleSave = async (r: RecordWithId) => {
         await updateRecord(r);
@@ -606,11 +606,68 @@ export default function RecordsTable() {
     };
 
     const handleDownloadPDF = async () => {
-        if (!tableRef.current) return;
-        const canvas = await html2canvas(tableRef.current, { scale: 2 });
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 210, (canvas.height * 210) / canvas.width);
-        pdf.save(`records_page_${currentPage}.pdf`);
+    const table = tableRef.current;
+    if (!table) return;
+
+    // Yield to ensure layout stabilizes
+    await new Promise(r => setTimeout(r, 0));
+
+    // Safer html2canvas options to avoid recursion on complex trees
+    const canvas = await html2canvas(table, {
+        scale: 2,
+        logging: false,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        removeContainer: true,
+    });
+
+    const pdf = new jsPDF("p", "mm", "a4");
+    const imgWidth = 210;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    // For long tables, paginate
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, position, imgWidth, imgHeight);
+    heightLeft -= 297;
+
+    while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, position, imgWidth, imgHeight);
+        heightLeft -= 297;
+    }
+
+    pdf.save(`records_page_${currentPage}.pdf`);
+};
+
+    const confirmDelete = async () => {
+        if (!deleteId) return;
+        await deleteRecord(deleteId);
+        setDeleteId(null);
+        await fetchRecords();
+    };
+    const cancelDelete = () => setDeleteId(null);
+
+    const handleDeleteAll = () => setConfirmDeleteAllOpen(true);
+    const confirmDeleteAll = async () => {
+        await deleteAllRecords();
+        setConfirmDeleteAllOpen(false);
+        await fetchRecords();
+    };
+    const cancelDeleteAll = () => setConfirmDeleteAllOpen(false);
+
+    const handleDownloadExcel = async () => {
+        const blob = await apiDownloadExcel();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "records.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     };
 
     if (isLoading) return <div style={{padding:20}}>Loading existing records...</div>;
@@ -646,6 +703,10 @@ export default function RecordsTable() {
                         />
                     </div>
                 </div>
+            </div>
+
+            <div style={{display:"flex", gap:8, margin:"12px 0"}}>
+                <button onClick={handleDeleteAll} style={{...actionButtonStyle, backgroundColor:"#dc2626"}}>Delete All</button>
             </div>
             
             <table style={tableStyle} ref={tableRef}>
@@ -689,6 +750,7 @@ export default function RecordsTable() {
                 <button onClick={handleDownloadPDF} style={{...actionButtonStyle, backgroundColor: "#dc3545", padding: '10px 15px', marginLeft: 0}}>
                     <FaFilePdf style={{marginRight: "8px"}} /> Download PDF
                 </button>
+                <button onClick={handleDownloadExcel} style={{...actionButtonStyle, backgroundColor: "#16a34a", padding: '10px 15px'}}>Download Excel</button>
 
                 {totalPages > 1 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -706,6 +768,23 @@ export default function RecordsTable() {
             </div>
             
             {isModalOpen && selectedRecord && <ViewEditModal record={selectedRecord} onClose={() => setIsModalOpen(false)} isEditing={isEditing} onSave={handleSave} />}
+            <ConfirmDialog
+            open={deleteId !== null}
+            title="Delete record?"
+            message="This action cannot be undone."
+            confirmText="Delete"
+            onConfirm={confirmDelete}
+            onCancel={cancelDelete}
+            />
+
+            <ConfirmDialog
+            open={confirmDeleteAllOpen}
+            title="Delete ALL records?"
+            message="This will permanently remove all records. This action cannot be undone."
+            confirmText="Delete All"
+            onConfirm={confirmDeleteAll}
+            onCancel={cancelDeleteAll}
+            />  
         </div>
     );
 }

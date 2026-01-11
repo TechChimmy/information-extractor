@@ -43,7 +43,7 @@
 
 # if __name__ == "__main__":
 #     app.run(port=5000, debug=True)
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os, json
 import pandas as pd
@@ -137,6 +137,17 @@ def records():
     arr = _read_all_records()
     return jsonify(arr)
 
+# --- DELETE ALL ROUTE ---
+@app.delete("/records")
+def delete_all_records():
+    """Deletes ALL records."""
+    try:
+        _write_all_records([])  # clears JSON and rewrites empty Excel
+        return jsonify({"ok": True, "message": "All records deleted"}), 200
+    except Exception as e:
+        print(f"Error during DELETE ALL: {e}")
+        return jsonify({"ok": False, "error": "Failed to delete all records"}), 500
+
 
 # --- NEW CRUD ROUTES FOR EDIT AND DELETE ---
 
@@ -160,7 +171,23 @@ def delete_record_route(id):
         print(f"Error during DELETE operation: {e}")
         return jsonify({"ok": False, "error": "Failed to delete record"}), 500
 
+# --- EXPORT ROUTE ---
+@app.get("/export/excel")
+def export_excel():
+    """Downloads the latest Excel of all records."""
+    try:
+        return send_file(
+            EXCEL_FILE,
+            as_attachment=True,
+            download_name="records.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        print(f"Error during Excel export: {e}")
+        return jsonify({"ok": False, "error": "Failed to export"}), 500
 
+
+# --- UPDATE ROUTE ---
 @app.route('/records/<string:id>', methods=['PUT'])
 def update_record_route(id):
     """Handles updating an existing record by ID."""

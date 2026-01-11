@@ -32,3 +32,13 @@ export const updateRecord = async (record: any) => {
   const res = await API.put(`/records/${record.id}`, record);
   return res.data;
 };
+
+export const deleteAllRecords = async () => {
+  const res = await API.delete("/records");
+  return res.data;
+};
+
+export const downloadExcel = async (): Promise<Blob> => {
+  const res = await API.get("/export/excel", { responseType: "blob" });
+  return res.data;
+};
