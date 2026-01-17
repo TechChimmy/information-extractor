@@ -29,7 +29,9 @@ export default function SheetsTabs({
   const onAdd = async () => {
     const name = prompt("New sheet name:", "Sheet " + (sheets.length + 1));
     if (!name) return;
-    await createSheet(name.trim());
+    const created = await createSheet(name.trim());
+    // Immediately make the new sheet active
+    setActiveId(created.id);
     await load();
   };
 

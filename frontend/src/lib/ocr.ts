@@ -368,7 +368,8 @@ const renderPageToImage = async (page: any): Promise<Blob> => {
 
 export const processPDF = async (
   file: File,
-  onProgress?: (p: number, page?: number, total?: number) => void
+  onProgress?: (p: number, page?: number, total?: number) => void,
+  shouldPause?: () => Promise<void>
 ): Promise<ChildData[]> => {
 
   const buffer = await file.arrayBuffer();
@@ -377,6 +378,9 @@ export const processPDF = async (
   const results: ChildData[] = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    if (shouldPause) {
+      await shouldPause();
+    }
     const page = await pdf.getPage(pageNum);
 
     // 1️⃣ Native text first

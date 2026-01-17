@@ -30,6 +30,7 @@ export default function UploadPDFMulti({ sheetId }: { sheetId?: string }) {
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [fileQueueInfo, setFileQueueInfo] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [isPaused, setIsPaused] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -53,6 +54,11 @@ export default function UploadPDFMulti({ sheetId }: { sheetId?: string }) {
             setStatus(
               `Processing file ${i + 1}/${files.length}: ${file.name} — Page ${page}/${total} (${p}%)`
             );
+          }
+        }, async () => {
+          // Pause hook: if paused, wait until resumed
+          while (isPaused) {
+            await new Promise(res => setTimeout(res, 200));
           }
         });
 
@@ -89,6 +95,20 @@ export default function UploadPDFMulti({ sheetId }: { sheetId?: string }) {
     }
   };
 
+  const handlePause = () => {
+    if (isProcessing) {
+      setIsPaused(true);
+      setStatus(prev => prev.endsWith('(Paused)') ? prev : `${prev} (Paused)`);
+    }
+  };
+
+  const handleResume = () => {
+    if (isProcessing) {
+      setIsPaused(false);
+      setStatus(prev => prev.replace(/\s*\(Paused\)$/,'').trim());
+    }
+  };
+
   return (
     <div
       style={{
@@ -119,6 +139,27 @@ export default function UploadPDFMulti({ sheetId }: { sheetId?: string }) {
       >
         {isProcessing ? "Processing..." : "Select PDF(s) for OCR"}
       </button>
+
+      {isProcessing && (
+        <>
+          <button
+            onClick={handlePause}
+            style={{ ...buttonStyle, backgroundColor: '#6c757d' }}
+            disabled={isPaused}
+            title="Pause processing"
+          >
+            Pause
+          </button>
+          <button
+            onClick={handleResume}
+            style={{ ...buttonStyle, backgroundColor: '#198754' }}
+            disabled={!isPaused}
+            title="Resume processing"
+          >
+            Resume
+          </button>
+        </>
+      )}
 
       <p
         style={{

@@ -11,6 +11,7 @@ import { ChildData } from "../lib/ocr";
 import ConfirmDialog from "./ConfirmDialog"; 
 
 const RECORDS_PER_PAGE = 15;
+const MAX_RECORDS = 250; // cap total entries across pagination
 const PAGE_WINDOW_SIZE = 4;
 
 interface RecordWithId extends ChildData {
@@ -131,12 +132,19 @@ export default function RecordsTableSelectable({ sheetId }: { sheetId?: string }
     const fetchRecords = async () => {
         setIsLoading(true);
         const data = sheetId ? await getSheetRecords(sheetId) : await getRecords();
-        setRows(data as RecordWithId[]); 
+        // Cap overall records to MAX_RECORDS (newest first retained)
+        setRows((data as RecordWithId[]).slice(0, MAX_RECORDS)); 
         setIsLoading(false);
         setSelectedIds(new Set());
     };
 
-    useEffect(() => { fetchRecords(); }, []);
+    useEffect(() => { fetchRecords(); }, [sheetId]);
+
+    // Reset pagination and selection when switching tabs
+    useEffect(() => {
+        setCurrentPage(1);
+        setSelectedIds(new Set());
+    }, [sheetId]);
 
     const filteredRows = useMemo(() => {
         let list = [...rows].reverse();
