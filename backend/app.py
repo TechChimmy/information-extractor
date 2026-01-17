@@ -57,9 +57,12 @@ DATA_FILE = Path("records.json")
 EXCEL_FILE = Path("records.xlsx")
 UPLOADS = Path("uploads")
 UPLOADS.mkdir(exist_ok=True)
+SHEETS_FILE = Path("sheets.json")
 
 if not DATA_FILE.exists():
     DATA_FILE.write_text("[]", encoding="utf-8")
+if not SHEETS_FILE.exists():
+    SHEETS_FILE.write_text("[]", encoding="utf-8")
 
 # --- CENTRALIZED FILE HANDLING FUNCTIONS ---
 
@@ -117,6 +120,17 @@ def _add_new_record(record):
     return record # Return the record with the new ID
 
 
+# --- SHEETS HELPERS ---
+def _read_sheets():
+    try:
+        return json.loads(SHEETS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def _write_sheets(sheets):
+    SHEETS_FILE.write_text(json.dumps(sheets, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 # --- ROUTES ---
 
 @app.get("/")
@@ -137,6 +151,79 @@ def records():
     arr = _read_all_records()
     return jsonify(arr)
 
+# --- SHEETS ROUTES ---
+
+@app.get("/sheets")
+def list_sheets():
+    return jsonify(_read_sheets())
+
+
+@app.post("/sheets")
+def create_sheet():
+    data = request.get_json() or {}
+    name = (data.get("name") or "Untitled").strip()
+    sheets = _read_sheets()
+    new_sheet = {
+        "id": uuid.uuid4().hex,
+        "name": name or "Untitled",
+        "createdAt": pd.Timestamp.utcnow().isoformat(),
+        "updatedAt": pd.Timestamp.utcnow().isoformat(),
+    }
+    sheets.append(new_sheet)
+    _write_sheets(sheets)
+    return jsonify(new_sheet), 201
+
+
+@app.patch("/sheets/<string:sheet_id>")
+def rename_sheet(sheet_id: str):
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    sheets = _read_sheets()
+    found = False
+    for s in sheets:
+        if s.get("id") == sheet_id:
+            if name:
+                s["name"] = name
+            s["updatedAt"] = pd.Timestamp.utcnow().isoformat()
+            found = True
+            break
+    if not found:
+        return jsonify({"ok": False, "error": "Sheet not found"}), 404
+    _write_sheets(sheets)
+    return jsonify({"ok": True})
+
+
+@app.delete("/sheets/<string:sheet_id>")
+def delete_sheet(sheet_id: str):
+    # delete sheet entry
+    sheets = _read_sheets()
+    sheets_new = [s for s in sheets if s.get("id") != sheet_id]
+    if len(sheets_new) == len(sheets):
+        return jsonify({"ok": False, "error": "Sheet not found"}), 404
+    _write_sheets(sheets_new)
+
+    # cascade delete records belonging to this sheet
+    arr = _read_all_records()
+    arr_new = [r for r in arr if r.get('sheetId') != sheet_id]
+    _write_all_records(arr_new)
+    return jsonify({"ok": True})
+
+
+@app.get("/sheets/<string:sheet_id>/records")
+def list_sheet_records(sheet_id: str):
+    arr = _read_all_records()
+    filtered = [r for r in arr if r.get('sheetId') == sheet_id]
+    return jsonify(filtered)
+
+
+@app.post("/sheets/<string:sheet_id>/records")
+def create_sheet_record(sheet_id: str):
+    data = request.get_json()
+    if not data:
+        return jsonify({"ok": False, "error": "no json received"}), 400
+    data['sheetId'] = sheet_id
+    created = _add_new_record(data)
+    return jsonify({"ok": True, "data": created})
 # --- DELETE ALL ROUTE ---
 @app.delete("/records")
 def delete_all_records():
@@ -174,12 +261,29 @@ def delete_record_route(id):
 # --- EXPORT ROUTE ---
 @app.get("/export/excel")
 def export_excel():
-    """Downloads the latest Excel of all records."""
+    """Downloads Excel of all records or a single sheet if sheetId is provided."""
     try:
+        sheet_id = request.args.get('sheetId')
+        arr = _read_all_records()
+        if sheet_id:
+            arr = [r for r in arr if r.get('sheetId') == sheet_id]
+
+        # Build a temp DataFrame and send as a file-like response
+        if arr:
+            df = pd.DataFrame(arr)
+            if 'id' in df.columns:
+                df = df.drop(columns=['id'])
+        else:
+            df = pd.DataFrame()
+
+        # Write to a temporary file path
+        tmp_path = EXCEL_FILE if not sheet_id else Path(f"records_{sheet_id}.xlsx")
+        df.to_excel(tmp_path, index=False)
+        download_name = "records.xlsx" if not sheet_id else "records_sheet.xlsx"
         return send_file(
-            EXCEL_FILE,
+            tmp_path,
             as_attachment=True,
-            download_name="records.xlsx",
+            download_name=download_name,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     except Exception as e:
