@@ -105,9 +105,37 @@ def _read_all_records():
     return arr
 
 
+def _is_duplicate(record, existing_records):
+    """Check if record is a duplicate based on childNumber or (name + DOB)."""
+    child_num = record.get('childNumber', '').strip().lower()
+    name = record.get('name', '').strip().lower()
+    dob = record.get('dateOfBirth', '').strip().lower()
+    
+    for existing in existing_records:
+        existing_child_num = existing.get('childNumber', '').strip().lower()
+        existing_name = existing.get('name', '').strip().lower()
+        existing_dob = existing.get('dateOfBirth', '').strip().lower()
+        
+        # Check by childNumber (if both have it)
+        if child_num and existing_child_num and child_num == existing_child_num:
+            return True
+        
+        # Check by name + DOB combination
+        if name and dob and existing_name and existing_dob:
+            if name == existing_name and dob == existing_dob:
+                return True
+    
+    return False
+
+
 def _add_new_record(record):
-    """Adds a unique ID and saves a new record to the list (newest first)."""
+    """Adds a unique ID and saves a new record to the list (newest first).
+    Returns (record, is_duplicate) tuple."""
     arr = _read_all_records()
+    
+    # Check for duplicates
+    if _is_duplicate(record, arr):
+        return record, True  # Return the record but flag as duplicate
     
     # Add unique ID to the new record
     record['id'] = uuid.uuid4().hex
@@ -117,7 +145,7 @@ def _add_new_record(record):
     
     # Write all records back to files
     _write_all_records(arr)
-    return record # Return the record with the new ID
+    return record, False  # Return the record with the new ID, not a duplicate
 
 
 # --- SHEETS HELPERS ---
@@ -143,8 +171,10 @@ def upload():
     if not data:
         return jsonify({"ok": False, "error": "no json received"}), 400
         
-    new_record_with_id = _add_new_record(data)
-    return jsonify({"ok": True, "data": new_record_with_id})
+    new_record, is_duplicate = _add_new_record(data)
+    if is_duplicate:
+        return jsonify({"ok": False, "duplicate": True, "error": "Duplicate record detected"}), 200
+    return jsonify({"ok": True, "data": new_record})
 
 @app.get("/records")
 def records():
@@ -222,7 +252,9 @@ def create_sheet_record(sheet_id: str):
     if not data:
         return jsonify({"ok": False, "error": "no json received"}), 400
     data['sheetId'] = sheet_id
-    created = _add_new_record(data)
+    created, is_duplicate = _add_new_record(data)
+    if is_duplicate:
+        return jsonify({"ok": False, "duplicate": True, "error": "Duplicate record detected"}), 200
     return jsonify({"ok": True, "data": created})
 # --- DELETE ALL ROUTE ---
 @app.delete("/records")
@@ -258,6 +290,20 @@ def delete_record_route(id):
         print(f"Error during DELETE operation: {e}")
         return jsonify({"ok": False, "error": "Failed to delete record"}), 500
 
+# --- PDF SERVING ROUTE ---
+@app.get("/uploads/<path:filename>")
+def serve_pdf(filename):
+    """Serve PDF files from the uploads directory."""
+    try:
+        return send_file(
+            UPLOADS / filename,
+            mimetype="application/pdf",
+        )
+    except Exception as e:
+        print(f"Error serving PDF: {e}")
+        return jsonify({"ok": False, "error": "File not found"}), 404
+
+
 # --- EXPORT ROUTE ---
 @app.get("/export/excel")
 def export_excel():
@@ -268,17 +314,80 @@ def export_excel():
         if sheet_id:
             arr = [r for r in arr if r.get('sheetId') == sheet_id]
 
-        # Build a temp DataFrame and send as a file-like response
+        # Build a temp DataFrame
         if arr:
             df = pd.DataFrame(arr)
-            if 'id' in df.columns:
-                df = df.drop(columns=['id'])
+            # Remove internal fields from export
+            cols_to_drop = ['id', 'sheetId', 'rawText']
+            for col in cols_to_drop:
+                if col in df.columns:
+                    df = df.drop(columns=[col])
         else:
             df = pd.DataFrame()
 
-        # Write to a temporary file path
+        # Define column order and widths for proper formatting
+        column_config = {
+            'name': {'header': 'Child Name', 'width': 25},
+            'childNumber': {'header': 'Child Number', 'width': 20},
+            'gender': {'header': 'Gender', 'width': 10},
+            'dateOfBirth': {'header': 'Date of Birth', 'width': 15},
+            'classOfStudy': {'header': 'Class', 'width': 20},
+            'center': {'header': 'Centre', 'width': 25},
+            'yearOfAdmission': {'header': 'Year', 'width': 10},
+            'background': {'header': 'Background', 'width': 80},
+            'pdfName': {'header': 'PDF File', 'width': 30},
+        }
+
+        # Write to a temporary file path with proper formatting
         tmp_path = EXCEL_FILE if not sheet_id else Path(f"records_{sheet_id}.xlsx")
-        df.to_excel(tmp_path, index=False)
+        
+        # Use xlsxwriter for better formatting control
+        with pd.ExcelWriter(tmp_path, engine='xlsxwriter') as writer:
+            # Reorder columns if they exist
+            ordered_cols = [col for col in column_config.keys() if col in df.columns]
+            # Add any extra columns not in config
+            extra_cols = [col for col in df.columns if col not in column_config]
+            df = df[ordered_cols + extra_cols] if len(df) > 0 else df
+            
+            df.to_excel(writer, index=False, sheet_name='Records')
+            
+            workbook = writer.book
+            worksheet = writer.sheets['Records']
+            
+            # Define formats
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#007bff',
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'text_wrap': True
+            })
+            
+            cell_format = workbook.add_format({
+                'border': 1,
+                'align': 'left',
+                'valign': 'top',
+                'text_wrap': True
+            })
+            
+            # Apply header format
+            for col_num, column in enumerate(df.columns):
+                header_text = column_config.get(column, {}).get('header', column)
+                worksheet.write(0, col_num, header_text, header_format)
+            
+            # Set column widths
+            for col_num, column in enumerate(df.columns):
+                width = column_config.get(column, {}).get('width', 15)
+                worksheet.set_column(col_num, col_num, width, cell_format)
+            
+            # Set row height for header
+            worksheet.set_row(0, 25)
+            
+            # Freeze the header row
+            worksheet.freeze_panes(1, 0)
+
         download_name = "records.xlsx" if not sheet_id else "records_sheet.xlsx"
         return send_file(
             tmp_path,

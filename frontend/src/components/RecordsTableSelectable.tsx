@@ -132,8 +132,8 @@ export default function RecordsTableSelectable({ sheetId }: { sheetId?: string }
     const fetchRecords = async () => {
         setIsLoading(true);
         const data = sheetId ? await getSheetRecords(sheetId) : await getRecords();
-        // Cap overall records to MAX_RECORDS (newest first retained)
-        setRows((data as RecordWithId[]).slice(0, MAX_RECORDS)); 
+        const rows = (data as RecordWithId[]).slice(0, MAX_RECORDS); 
+        setRows(rows);
         setIsLoading(false);
         setSelectedIds(new Set());
     };
@@ -161,6 +161,7 @@ export default function RecordsTableSelectable({ sheetId }: { sheetId?: string }
 
     useEffect(() => { setCurrentPage(1); }, [searchTerm, filterColumn]);
 
+    const actualRecordCount = Math.min(rows.length, MAX_RECORDS);
     const totalRecords = filteredRows.length;
     const totalPages = Math.ceil(totalRecords / RECORDS_PER_PAGE);
     const startIndex = (currentPage - 1) * RECORDS_PER_PAGE;
@@ -217,7 +218,7 @@ export default function RecordsTableSelectable({ sheetId }: { sheetId?: string }
     return (
         <div style={{padding:20}}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                <h2>Existing Records ({totalRecords})</h2>
+                <h2>Existing Records ({actualRecordCount})</h2>
                 <div style={searchContainerStyle}>
                     <div style={inputGroupStyle}>
                         <FaFilter style={{color: '#888', marginRight: '5px'}} />

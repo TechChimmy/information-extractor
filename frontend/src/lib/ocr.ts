@@ -26,7 +26,7 @@
 //   if (!value) return "";
 //   let cleaned = value.replace(/\s+/g, " ").trim();
 //   cleaned = cleaned.replace(/["',.;:]+$/, '').replace(/^["',.;:]+/, '').trim();
-  
+
 //   if (maxWords > 0) {
 //     // Only slice for Name field to prevent over-capturing
 //     return cleaned.split(" ").slice(0, maxWords).join(" ");
@@ -157,7 +157,7 @@
 //   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 //   const numPages = pdf.numPages;
 //   const results: ChildData[] = [];
-  
+
 //   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
 //     const page = await pdf.getPage(pageNum);
 //     const viewport = page.getViewport({ scale: 2.0 });
@@ -169,11 +169,11 @@
 //     await page.render(renderContext).promise;
 //     const blob: Blob = await new Promise((res) => canvas.toBlob((b)=>res(b!), "image/png", 0.9));
 //     if (onProgress) onProgress(0, pageNum, numPages);
-    
+
 //     const text = await processImage(blob, (p)=> onProgress && onProgress(p, pageNum, numPages)); 
-    
+
 //     const normalized = text.replace(/\r/g,'\n').replace(/[ \t]{2,}/g,' ').replace(/\n\s+\n/g, '\n').trim();
-    
+
 //     // 1. Name (FINAL REVISED - Focusing on capitalized words)
 //     // Match the label, then consume ANY character non-greedily ([\s\S]*?) until we hit a pattern that looks like a name.
 //     // Name pattern: one or more words starting with an uppercase letter, separated by spaces/hyphens/dots.
@@ -187,7 +187,7 @@
 //     // 3. Gender
 //     const genderPattern = /(?:Gender|Sex)\s*[:\-\s\n]*([A-Za-z\s]+)/i;
 //     let gender = extractField(normalized, genderPattern) || "";
-    
+
 //     if (gender) {
 //         gender = gender.replace(/[^A-Za-z]/g, "").trim();
 //         if (gender.length >= 3) {
@@ -203,10 +203,10 @@
 //     const dateOfBirth = extractDateOfBirth(normalized);
 //     const classOfStudy = extractClass(normalized) || "";
 //     const center = extractCenter(normalized) || "";
-    
+
 //     // 5. Year of Admission
 //     const yearOfAdmission = extractField(normalized, /Year\s*of\s*admission\s*[:\-\s\n]*([0-9]{4})/i) || extractField(normalized, /Admission\s*Year\s*[:\-\s\n]*([0-9]{4})/i) || "";
-    
+
 //     // 6. Background
 //     let background = "";
 //     const bgMatch = normalized.match(/Child\s*Background\s*[:\-\s\n]+([\s\S]+)$/im);
@@ -216,7 +216,7 @@
 //       const longCandidate = normalized.split("\n").find(l => l.length > 80);
 //       background = longCandidate || "";
 //     }
-    
+
 //     results.push({
 //       name, childNumber, gender, dateOfBirth, classOfStudy, center, yearOfAdmission, background, rawText: normalized
 //     });
@@ -242,6 +242,7 @@ export interface ChildData {
   yearOfAdmission?: string;
   background?: string;
   rawText?: string;
+  pdfName?: string;
 }
 
 /* ============================================================
@@ -264,10 +265,14 @@ const getOCRWorker = async (progressCb?: (p: number) => void) => {
   await ocrWorker.load();
   await ocrWorker.loadLanguage("eng");
   await ocrWorker.initialize("eng");
+
+  // Optimized parameters for maximum accuracy
   await ocrWorker.setParameters({
     tessedit_ocr_engine_mode: OEM.LSTM_ONLY,
-    tessedit_pageseg_mode: PSM.AUTO,
+    tessedit_pageseg_mode: PSM.SINGLE_BLOCK,  // Better for document pages
     preserve_interword_spaces: "1",
+    // Additional accuracy improvements
+    tessedit_char_blacklist: '|{}[]<>',  // Remove unlikely characters
   });
 
   return ocrWorker;
@@ -302,7 +307,7 @@ const formatDateStr = (dateStr = "") => {
   const d = m[1].padStart(2, "0");
   const mo = Number(m[2]);
   const y = m[3].length === 2 ? (Number(m[3]) > 50 ? "19" : "20") + m[3] : m[3];
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   return `${d} ${months[mo - 1] || mo} ${y}`;
 };
@@ -324,7 +329,7 @@ export const extractClass = (text: string): string => {
   if (!m) return "";
 
   let cls = m[1].trim();
-  const romanMap: any = { I:1, II:2, III:3, IV:4, V:5, VI:6, VII:7, VIII:8, IX:9, X:10 };
+  const romanMap: any = { I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10 };
   const roman = cls.match(/\b(I|II|III|IV|V|VI|VII|VIII|IX|X)\b/);
 
   if (roman) cls = cls.replace(roman[0], romanMap[roman[0]]);
@@ -348,16 +353,55 @@ const extractTextLayer = async (page: any): Promise<string> => {
 };
 
 /* ============================================================
-   PAGE → IMAGE FOR OCR
+   PAGE → IMAGE FOR OCR (OPTIMIZED FOR ACCURACY)
 ============================================================ */
 
+// Apply image preprocessing for better OCR accuracy
+const preprocessImage = (canvas: HTMLCanvasElement): HTMLCanvasElement => {
+  const ctx = canvas.getContext('2d')!;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+
+  // Convert to grayscale and increase contrast
+  for (let i = 0; i < data.length; i += 4) {
+    // Grayscale using luminosity method
+    const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+
+    // Apply contrast enhancement (1.2x)
+    const contrast = 1.2;
+    const adjusted = ((gray - 128) * contrast) + 128;
+
+    // Apply threshold for cleaner text
+    const threshold = 180;
+    const final = adjusted > threshold ? 255 : (adjusted < 60 ? 0 : adjusted);
+
+    data[i] = final;     // R
+    data[i + 1] = final; // G
+    data[i + 2] = final; // B
+    // Alpha stays the same
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+};
+
 const renderPageToImage = async (page: any): Promise<Blob> => {
-  const viewport = page.getViewport({ scale: 3 });
+  // Higher scale = higher DPI = better OCR accuracy
+  // Scale 4 = ~288 DPI (72 * 4)
+  const viewport = page.getViewport({ scale: 4 });
   const canvas = document.createElement("canvas");
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const ctx = canvas.getContext("2d")!;
+
+  // White background for better contrast
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
   await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // Apply preprocessing for better OCR
+  preprocessImage(canvas);
 
   return new Promise(res => canvas.toBlob(b => res(b!), "image/png", 1));
 };
@@ -408,7 +452,7 @@ export const processPDF = async (
     const genderRaw = extractField(normalized, /(?:Gender|Sex)\s*[:\-\s]*([A-Za-z]+)/i);
     const gender =
       genderRaw.toLowerCase().startsWith("m") ? "Male" :
-      genderRaw.toLowerCase().startsWith("f") ? "Female" : "";
+        genderRaw.toLowerCase().startsWith("f") ? "Female" : "";
 
     results.push({
       name,
